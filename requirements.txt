@@ -1,5 +1,6 @@
+fastmcp
 flask
 pandas
 python-dotenv
-openai
 sarvamai
+uvicorn
