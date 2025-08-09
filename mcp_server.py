@@ -389,4 +389,4 @@ if __name__ == "__main__":
     #mcp.run(port=8000, host="0.0.0.0")
     #mcp.run()
     port = int(os.environ.get("PORT", 5000))
-    mcp.run(host="0.0.0.0", port=port, debug=False)
+    mcp.run(port=port, debug=False)
