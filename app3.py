@@ -24,8 +24,18 @@ def check_auth(req):
     return req.headers.get("Authorization") == f"Bearer {AUTH_TOKEN}"
 
 def nl_to_sql_sarvam(nl_question: str, max_tokens: int = 100) -> str:
+
+    conn = sqlite3.connect(DATABASE_PATH)
+    cursor = conn.cursor()
+    
+    # Get column names
+    cursor.execute("PRAGMA table_info(data)")
+    columns = [col[1] for col in cursor.fetchall()]  # Extract column names
+    conn.close()
+
     prompt = (
         f"You are an assistant that converts natural language questions into SQL queries for a SQLite table named 'data'.\n"
+        f"Available columns: {', '.join(columns)}"
         f"Question: {nl_question}\n"
         f"Only return the SQL query, nothing else."
     )
