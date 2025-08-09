@@ -12,6 +12,7 @@ load_dotenv()
 AUTH_TOKEN = os.getenv("PUCH_AUTH_TOKEN")  # Changed to match your .env
 SARVAMAI_KEY = os.getenv("SARVAMAI_KEY")
 DATABASE_PATH = os.getenv("DATABASE_PATH", "./demo.db")
+PUCH_PHONE_NUMBER = os.getenv("PHONE_NUMBER")
 
 # Initialize Sarvam AI client
 client = SarvamAI(api_subscription_key=SARVAMAI_KEY)
@@ -118,6 +119,19 @@ def query_nl():
         conn.close()
 
     return jsonify({"sql": sql_query, "result": result}), 200
+
+@app.route("/validate", methods=["GET"])
+def validate():
+    """Required by Puch AI to verify server ownership"""
+    phone_number = os.getenv("PUCH_PHONE_NUMBER")
+    
+    if not phone_number:
+        return jsonify({"error": "Phone number not configured"}), 500
+    
+    return jsonify({
+        "phone_number": phone_number,
+        "status": "validated"
+    }), 200
 
 if __name__ == "__main__":
     # Only change: use Railway's PORT environment variable
