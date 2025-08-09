@@ -1,5 +1,6 @@
 fastmcp
 flask
+flask-cors
 pandas
 python-dotenv
 sarvamai
