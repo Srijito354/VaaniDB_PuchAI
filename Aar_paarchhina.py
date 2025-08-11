@@ -147,6 +147,86 @@ UploadCSVDescription = RichToolDescription(
     side_effects="Replaces the existing data in the database with the new CSV data",
 )
 
+
+# --- Tool: whatsapp_upload_and_query ---
+WhatsAppToolDescription = RichToolDescription(
+    description="Handle both CSV uploads and natural language queries from WhatsApp",
+    use_when="When receiving either a CSV file or a data question via WhatsApp",
+    side_effects="May upload data to database or query existing data"
+)
+
+@mcp.tool(description=WhatsAppToolDescription.model_dump_json())
+async def whatsapp_upload_and_query(
+    message_content: Annotated[str, Field(description="Text content or base64-encoded file")],
+    is_file: Annotated[bool, Field(description="Whether the content is a file")] = False,
+    question: Annotated[str | None, Field(description="Follow-up question if any")] = None
+) -> str:
+    """Handle both file uploads and questions in one WhatsApp-friendly tool"""
+    try:
+        # Handle file upload
+        if is_file:
+            import base64
+            from io import StringIO
+            
+            # Decode and process CSV
+            csv_content = base64.b64decode(message_content).decode('utf-8')
+            df = pd.read_csv(StringIO(csv_content))
+            
+            # Store in database
+            conn = sqlite3.connect(DATABASE_PATH)
+            df.to_sql("data", conn, if_exists="replace", index=False)
+            conn.close()
+            
+            response = {
+                "success": True,
+                "message": "CSV uploaded successfully",
+                "rows_uploaded": len(df),
+                "columns": list(df.columns)
+            }
+            
+            # If there's also a question, process it
+            if question:
+                sql_query = nl_to_sql_sarvam(question)
+                conn = sqlite3.connect(DATABASE_PATH)
+                result_df = pd.read_sql_query(sql_query, conn)
+                conn.close()
+                
+                response["query_response"] = {
+                    "question": question,
+                    "sql": sql_query,
+                    "result": result_df.to_dict(orient="records")
+                }
+            
+            return json.dumps(response, indent=2)
+        
+        # Handle pure question
+        elif question:
+            sql_query = nl_to_sql_sarvam(question)
+            conn = sqlite3.connect(DATABASE_PATH)
+            result_df = pd.read_sql_query(sql_query, conn)
+            conn.close()
+            
+            return json.dumps({
+                "success": True,
+                "question": question,
+                "sql": sql_query,
+                "result": result_df.to_dict(orient="records"),
+                "message": f"Found {len(result_df)} results"
+            }, indent=2)
+        
+        else:
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message="Either a file or question must be provided"
+            ))
+            
+    except Exception as e:
+        raise McpError(ErrorData(
+            code=INTERNAL_ERROR,
+            message=f"Processing failed: {str(e)}"
+        ))
+
+
 @mcp.tool(description=UploadCSVDescription.model_dump_json())
 async def upload_csv_from_url(
     url: Annotated[AnyUrl, Field(description="URL of the CSV file")]
