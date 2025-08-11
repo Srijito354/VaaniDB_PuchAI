@@ -27,7 +27,7 @@ To judges reviewing my submission. While my MCP server couldn't be made availabl
 
 1. Upload your CSV file – The system ingests and stores it in a secure database.
 2. Ask a question in natural language – e.g., “Show me the total sales in Mumbai last month.”
-3. AI converts your question to SQL – Using Sarvam AI to ensure accurate database queries.
+3. AI converts your question to SQL – Using Sarvam AI to ensure accurate database queries. Sarvam AI also enables VaaniDB to work on multiple languages.
 4. Results are explained back in plain language – No more squinting at raw tables.
 
 
