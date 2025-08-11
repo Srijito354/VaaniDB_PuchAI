@@ -8,19 +8,28 @@ from mcp import ErrorData, McpError
 from mcp.server.auth.provider import AccessToken
 from mcp.types import TextContent, ImageContent, INVALID_PARAMS, INTERNAL_ERROR
 from pydantic import BaseModel, Field, AnyUrl
-
-import markdownify
-import httpx
-import readabilipy
+import sqlite3
+import pandas as pd
+import json
+from datetime import datetime
 
 # --- Load environment variables ---
 load_dotenv()
 
 TOKEN = os.environ.get("PUCH_AUTH_TOKEN")
 MY_NUMBER = os.environ.get("PHONE_NUMBER")
+DATABASE_PATH = os.environ.get("DATABASE_PATH", "./demo.db")
+SARVAMAI_KEY = os.environ.get("SARVAMAI_KEY")
 
-assert TOKEN is not None, "Please set AUTH_TOKEN in your .env file"
-assert MY_NUMBER is not None, "Please set MY_NUMBER in your .env file"
+assert TOKEN is not None, "Please set PUCH_AUTH_TOKEN in your .env file"
+assert MY_NUMBER is not None, "Please set PHONE_NUMBER in your .env file"
+
+# Initialize Sarvam AI client if key is available
+if SARVAMAI_KEY:
+    from sarvamai import SarvamAI
+    sarvam_client = SarvamAI(api_subscription_key=SARVAMAI_KEY)
+else:
+    sarvam_client = None
 
 # --- Auth Provider ---
 class SimpleBearerAuthProvider(BearerAuthProvider):
@@ -45,81 +54,41 @@ class RichToolDescription(BaseModel):
     use_when: str
     side_effects: str | None = None
 
-# --- Fetch Utility Class ---
-class Fetch:
-    USER_AGENT = "Puch/1.0 (Autonomous)"
+def nl_to_sql_sarvam(nl_question: str, max_tokens: int = 100) -> str:
+    """Convert natural language to SQL using Sarvam AI"""
+    if not sarvam_client:
+        raise ValueError("Sarvam AI client not initialized - check SARVAMAI_KEY")
+    
+    conn = sqlite3.connect(DATABASE_PATH)
+    cursor = conn.cursor()
+    
+    # Get column names
+    cursor.execute("PRAGMA table_info(data)")
+    columns = [col[1] for col in cursor.fetchall()]
+    conn.close()
 
-    @classmethod
-    async def fetch_url(
-        cls,
-        url: str,
-        user_agent: str,
-        force_raw: bool = False,
-    ) -> tuple[str, str]:
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(
-                    url,
-                    follow_redirects=True,
-                    headers={"User-Agent": user_agent},
-                    timeout=30,
-                )
-            except httpx.HTTPError as e:
-                raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Failed to fetch {url}: {e!r}"))
-
-            if response.status_code >= 400:
-                raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Failed to fetch {url} - status code {response.status_code}"))
-
-            page_raw = response.text
-
-        content_type = response.headers.get("content-type", "")
-        is_page_html = "text/html" in content_type
-
-        if is_page_html and not force_raw:
-            return cls.extract_content_from_html(page_raw), ""
-
-        return (
-            page_raw,
-            f"Content type {content_type} cannot be simplified to markdown, but here is the raw content:\n",
+    prompt = (
+        f"You are an assistant that converts natural language questions into SQL queries for a SQLite table named 'data'.\n"
+        f"Available columns: {', '.join(columns)}\n"
+        f"Question: {nl_question}\n"
+        f"Only return the SQL query, nothing else."
+    )
+    
+    try:
+        resp = sarvam_client.chat.completions(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+            temperature=0.0
         )
-
-    @staticmethod
-    def extract_content_from_html(html: str) -> str:
-        """Extract and convert HTML content to Markdown format."""
-        ret = readabilipy.simple_json.simple_json_from_html_string(html, use_readability=True)
-        if not ret or not ret.get("content"):
-            return "<error>Page failed to be simplified from HTML</error>"
-        content = markdownify.markdownify(ret["content"], heading_style=markdownify.ATX)
-        return content
-
-    @staticmethod
-    async def google_search_links(query: str, num_results: int = 5) -> list[str]:
-        """
-        Perform a scoped DuckDuckGo search and return a list of job posting URLs.
-        (Using DuckDuckGo because Google blocks most programmatic scraping.)
-        """
-        ddg_url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
-        links = []
-
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(ddg_url, headers={"User-Agent": Fetch.USER_AGENT})
-            if resp.status_code != 200:
-                return ["<error>Failed to perform search.</error>"]
-
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(resp.text, "html.parser")
-        for a in soup.find_all("a", class_="result__a", href=True):
-            href = a["href"]
-            if "http" in href:
-                links.append(href)
-            if len(links) >= num_results:
-                break
-
-        return links or ["<error>No results found.</error>"]
+        sql_query = resp.choices[0].message.content.strip()
+        return sql_query
+    except Exception as e:
+        raise ValueError(f"Sarvam AI error: {str(e)}")
 
 # --- MCP Server Setup ---
 mcp = FastMCP(
-    "Job Finder MCP Server",
+    "VaaniDB MCP Server",
+    description="Natural language to SQL database query system with Sarvam AI integration",
     auth=SimpleBearerAuthProvider(TOKEN),
 )
 
@@ -128,84 +97,162 @@ mcp = FastMCP(
 async def validate() -> str:
     return MY_NUMBER
 
-# --- Tool: job_finder (now smart!) ---
-JobFinderDescription = RichToolDescription(
-    description="Smart job tool: analyze descriptions, fetch URLs, or search jobs based on free text.",
-    use_when="Use this to evaluate job descriptions or search for jobs using freeform goals.",
-    side_effects="Returns insights, fetched job descriptions, or relevant job links.",
+# --- Tool: query_database ---
+QueryDatabaseDescription = RichToolDescription(
+    description="Query the database using natural language",
+    use_when="Use this when you need to get data from the database using plain English questions",
+    side_effects="Executes SQL queries on the database and returns results",
 )
 
-@mcp.tool(description=JobFinderDescription.model_dump_json())
-async def job_finder(
-    user_goal: Annotated[str, Field(description="The user's goal (can be a description, intent, or freeform query)")],
-    job_description: Annotated[str | None, Field(description="Full job description text, if available.")] = None,
-    job_url: Annotated[AnyUrl | None, Field(description="A URL to fetch a job description from.")] = None,
-    raw: Annotated[bool, Field(description="Return raw HTML content if True")] = False,
+@mcp.tool(description=QueryDatabaseDescription.model_dump_json())
+async def query_database(
+    question: Annotated[str, Field(description="Natural language question about the data")],
+    max_tokens: Annotated[int, Field(description="Maximum tokens for AI response", default=100)] = 100
 ) -> str:
-    """
-    Handles multiple job discovery methods: direct description, URL fetch, or freeform search query.
-    """
-    if job_description:
-        return (
-            f"📝 **Job Description Analysis**\n\n"
-            f"---\n{job_description.strip()}\n---\n\n"
-            f"User Goal: **{user_goal}**\n\n"
-            f"💡 Suggestions:\n- Tailor your resume.\n- Evaluate skill match.\n- Consider applying if relevant."
-        )
+    """Query the database using natural language"""
+    if not sarvam_client:
+        raise McpError(ErrorData(
+            code=INTERNAL_ERROR,
+            message="Sarvam AI not configured - check SARVAMAI_KEY"
+        ))
+    
+    try:
+        # Convert natural language to SQL
+        sql_query = nl_to_sql_sarvam(question, max_tokens)
+        
+        # Execute the query
+        conn = sqlite3.connect(DATABASE_PATH)
+        result_df = pd.read_sql_query(sql_query, conn)
+        conn.close()
+        
+        results = result_df.to_dict(orient="records")
+        
+        return json.dumps({
+            "success": True,
+            "sql": sql_query,
+            "result": results,
+            "message": f"Query executed successfully. Found {len(results)} results."
+        }, indent=2)
+        
+    except Exception as e:
+        raise McpError(ErrorData(
+            code=INTERNAL_ERROR,
+            message=f"Database query failed: {str(e)}"
+        ))
 
-    if job_url:
-        content, _ = await Fetch.fetch_url(str(job_url), Fetch.USER_AGENT, force_raw=raw)
-        return (
-            f"🔗 **Fetched Job Posting from URL**: {job_url}\n\n"
-            f"---\n{content.strip()}\n---\n\n"
-            f"User Goal: **{user_goal}**"
-        )
-
-    if "look for" in user_goal.lower() or "find" in user_goal.lower():
-        links = await Fetch.google_search_links(user_goal)
-        return (
-            f"🔍 **Search Results for**: _{user_goal}_\n\n" +
-            "\n".join(f"- {link}" for link in links)
-        )
-
-    raise McpError(ErrorData(code=INVALID_PARAMS, message="Please provide either a job description, a job URL, or a search query in user_goal."))
-
-
-# Image inputs and sending images
-
-MAKE_IMG_BLACK_AND_WHITE_DESCRIPTION = RichToolDescription(
-    description="Convert an image to black and white and save it.",
-    use_when="Use this tool when the user provides an image URL and requests it to be converted to black and white.",
-    side_effects="The image will be processed and saved in a black and white format.",
+# --- Tool: upload_csv_from_url ---
+UploadCSVDescription = RichToolDescription(
+    description="Upload CSV data from a URL to the database",
+    use_when="Use this when you need to load data from a CSV URL into the database",
+    side_effects="Replaces the existing data in the database with the new CSV data",
 )
 
-@mcp.tool(description=MAKE_IMG_BLACK_AND_WHITE_DESCRIPTION.model_dump_json())
-async def make_img_black_and_white(
-    puch_image_data: Annotated[str, Field(description="Base64-encoded image data to convert to black and white")] = None,
-) -> list[TextContent | ImageContent]:
-    import base64
-    import io
-
-    from PIL import Image
-
+@mcp.tool(description=UploadCSVDescription.model_dump_json())
+async def upload_csv_from_url(
+    url: Annotated[AnyUrl, Field(description="URL of the CSV file")]
+) -> str:
+    """Upload CSV data from a URL to the database"""
     try:
-        image_bytes = base64.b64decode(puch_image_data)
-        image = Image.open(io.BytesIO(image_bytes))
-
-        bw_image = image.convert("L")
-
-        buf = io.BytesIO()
-        bw_image.save(buf, format="PNG")
-        bw_bytes = buf.getvalue()
-        bw_base64 = base64.b64encode(bw_bytes).decode("utf-8")
-
-        return [ImageContent(type="image", mimeType="image/png", data=bw_base64)]
+        df = pd.read_csv(str(url))
+        
+        conn = sqlite3.connect(DATABASE_PATH)
+        df.to_sql("data", conn, if_exists="replace", index=False)
+        conn.close()
+        
+        return json.dumps({
+            "success": True,
+            "message": "CSV uploaded and stored in database successfully",
+            "rows_uploaded": len(df),
+            "columns": list(df.columns)
+        }, indent=2)
+        
     except Exception as e:
-        raise McpError(ErrorData(code=INTERNAL_ERROR, message=str(e)))
+        raise McpError(ErrorData(
+            code=INTERNAL_ERROR,
+            message=f"Failed to upload CSV: {str(e)}"
+        ))
+
+# --- Tool: get_database_info ---
+DatabaseInfoDescription = RichToolDescription(
+    description="Get basic information about the database",
+    use_when="Use this to understand what tables and columns are available in the database",
+    side_effects="None",
+)
+
+@mcp.tool(description=DatabaseInfoDescription.model_dump_json())
+async def get_database_info() -> str:
+    """Get basic information about the database"""
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        
+        # Get table info
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = [row[0] for row in cursor.fetchall()]
+        
+        table_info = {}
+        for table in tables:
+            cursor.execute(f"PRAGMA table_info({table})")
+            columns = [col[1] for col in cursor.fetchall()]
+            
+            cursor.execute(f"SELECT COUNT(*) FROM {table}")
+            row_count = cursor.fetchone()[0]
+            
+            table_info[table] = {
+                "columns": columns,
+                "row_count": row_count
+            }
+        
+        conn.close()
+        
+        return json.dumps({
+            "success": True,
+            "tables": table_info,
+            "message": "Database information retrieved successfully"
+        }, indent=2)
+        
+    except Exception as e:
+        raise McpError(ErrorData(
+            code=INTERNAL_ERROR,
+            message=f"Failed to retrieve database information: {str(e)}"
+        ))
+
+# --- Tool: get_sample_data ---
+SampleDataDescription = RichToolDescription(
+    description="Get sample data from a table",
+    use_when="Use this to see example data from a specific table",
+    side_effects="None",
+)
+
+@mcp.tool(description=SampleDataDescription.model_dump_json())
+async def get_sample_data(
+    table_name: Annotated[str, Field(description="Name of the table", default="data")] = "data",
+    limit: Annotated[int, Field(description="Number of rows to return", default=5)] = 5
+) -> str:
+    """Get sample data from a table"""
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        sample_df = pd.read_sql_query(f"SELECT * FROM {table_name} LIMIT {limit}", conn)
+        conn.close()
+        
+        return json.dumps({
+            "success": True,
+            "sample_data": sample_df.to_dict(orient="records"),
+            "columns": list(sample_df.columns),
+            "message": f"Retrieved {len(sample_df)} sample rows from {table_name}"
+        }, indent=2)
+        
+    except Exception as e:
+        raise McpError(ErrorData(
+            code=INTERNAL_ERROR,
+            message=f"Failed to retrieve sample data: {str(e)}"
+        ))
 
 # --- Run MCP Server ---
 async def main():
-    print("🚀 Starting MCP server on http://0.0.0.0:8086")
+    print(f"🚀 Starting VaaniDB MCP Server on http://0.0.0.0:8086")
+    print(f"Database path: {DATABASE_PATH}")
+    print(f"Sarvam AI configured: {'✓' if sarvam_client else '✗'}")
     await mcp.run_async("streamable-http", host="0.0.0.0", port=8086)
 
 if __name__ == "__main__":
