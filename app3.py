@@ -133,6 +133,33 @@ def validate():
         "status": "validated"
     }), 200
 
+@app.route("/summarize", methods=["POST"])
+def summarize_result():
+    data = request.json
+    question = data.get("question")
+    result = data.get("result")
+
+    if not question or not isinstance(result, list):
+        return jsonify({"error": "Missing question or result"}), 400
+
+    try:
+        prompt = (
+            f"You are an assistant. Given the question:\n"
+            f"{question}\n"
+            f"And the following query result rows:\n"
+            f"{result}\n"
+            f"Write a concise and clear natural language answer."
+        )
+        resp = client.chat.completions(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=200,
+            temperature=0.2
+        )
+        answer = resp.choices[0].message.content.strip()
+        return jsonify({"answer": answer}), 200
+    except Exception as e:
+        return jsonify({"error": f"Sarvam AI error: {str(e)}"}), 500
+
 if __name__ == "__main__":
     # Only change: use Railway's PORT environment variable
     port = int(os.environ.get("PORT", 5000))
