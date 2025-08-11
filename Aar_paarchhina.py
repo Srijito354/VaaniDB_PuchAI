@@ -151,7 +151,7 @@ UploadCSVDescription = RichToolDescription(
 async def upload_csv_from_url(
     url: Annotated[AnyUrl, Field(description="URL of the CSV file")]
 ) -> str:
-    """Upload CSV data from a URL to the database"""
+    """Upload CSV data from a URL to the database... Dhddd"""
     try:
         df = pd.read_csv(str(url))
         
