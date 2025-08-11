@@ -61,7 +61,7 @@ def upload_csv():
         #return jsonify({"error": "Unauthorized"}), 401
 
     #if "file" not in request.files:
-    return jsonify({"error": "No file uploaded"}), 400
+        #return jsonify({"error": "No file uploaded"}), 400
 
     file = request.files["file"]
     df = pd.read_csv(file)
