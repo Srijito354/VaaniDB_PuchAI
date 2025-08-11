@@ -75,7 +75,7 @@ def upload_csv():
 @app.route("/upload-url", methods=["POST"])  # Added for easier testing
 def upload_csv_from_url():
     #if not check_auth(request):
-    return jsonify({"error": "Unauthorized"}), 401
+    #return jsonify({"error": "Unauthorized"}), 401
 
     data = request.json
     url = data.get("url")
@@ -94,7 +94,7 @@ def upload_csv_from_url():
 @app.route("/query", methods=["POST"])
 def query_nl():
     #if not check_auth(request):
-    return jsonify({"error": "Unauthorized"}), 401
+    #return jsonify({"error": "Unauthorized"}), 401
 
     data = request.json
     question = data.get("question")
