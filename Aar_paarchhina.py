@@ -88,7 +88,7 @@ def nl_to_sql_sarvam(nl_question: str, max_tokens: int = 100) -> str:
 # --- MCP Server Setup ---
 mcp = FastMCP(
     "VaaniDB MCP Server",
-    description="Natural language to SQL database query system with Sarvam AI integration",
+    #description="Natural language to SQL database query system with Sarvam AI integration",
     auth=SimpleBearerAuthProvider(TOKEN),
 )
 
