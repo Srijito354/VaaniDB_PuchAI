@@ -147,7 +147,7 @@ UploadCSVDescription = RichToolDescription(
     side_effects="Replaces the existing data in the database with the new CSV data",
 )
 
-
+'''
 # --- Tool: whatsapp_upload_and_query ---
 WhatsAppToolDescription = RichToolDescription(
     description="Handle both CSV uploads and natural language queries from WhatsApp",
@@ -225,6 +225,7 @@ async def whatsapp_upload_and_query(
             code=INTERNAL_ERROR,
             message=f"Processing failed: {str(e)}"
         ))
+'''
 
 
 @mcp.tool(description=UploadCSVDescription.model_dump_json())
