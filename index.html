@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>VaaniDB - NL to SQL</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  body { font-family: sans-serif; background: #f6f8fa; margin: 0; padding: 20px; }
+  h1 { color: #333; }
+  .container { max-width: 900px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+  label { font-weight: bold; display: block; margin-top: 15px; }
+  input[type="file"], input[type="text"], textarea { width: 100%; padding: 8px; margin-top: 5px; }
+  button { padding: 10px 20px; background: #007bff; border: none; border-radius: 4px; color: #fff; cursor: pointer; margin-top: 10px; }
+  button:disabled { background: #aaa; cursor: not-allowed; }
+  table { border-collapse: collapse; width: 100%; margin-top: 15px; }
+  th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+  th { background: #f0f0f0; }
+  pre { background: #f6f8fa; padding: 10px; overflow-x: auto; }
+  .error { color: red; margin-top: 10px; }
+  .answer { background: #e8f7e4; padding: 10px; margin-top: 15px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>VaaniDB - NL → SQL</h1>
+
+  <!-- CSV Upload -->
+  <label for="csvFile">Upload CSV:</label>
+  <input type="file" id="csvFile" accept=".csv">
+  <button id="uploadBtn">Upload CSV</button>
+  <div id="uploadMsg"></div>
+
+  <!-- Question -->
+  <label for="question">Ask a Question:</label>
+  <textarea id="question" rows="3" placeholder="e.g. Show me the total sales by city"></textarea>
+  <button id="askBtn">Ask</button>
+
+  <!-- SQL Output -->
+  <h3>Generated SQL</h3>
+  <pre id="sqlOutput">(no query yet)</pre>
+
+  <!-- Results Table -->
+  <h3>Query Results</h3>
+  <div id="resultsArea">No results yet</div>
+
+  <!-- Natural Language Answer -->
+  <h3>Natural Language Answer</h3>
+  <div id="answerArea" class="answer">No answer yet</div>
+
+  <!-- Error -->
+  <div id="error" class="error"></div>
+</div>
+
+<script>
+const BASE_URL = "https://vaanidb-puchai-3.onrender.com"; // Change if running locally
+
+document.getElementById("uploadBtn").addEventListener("click", async () => {
+  const fileInput = document.getElementById("csvFile");
+  if (!fileInput.files.length) {
+    alert("Please select a CSV file.");
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("file", fileInput.files[0]);
+
+  try {
+    const res = await fetch(`${BASE_URL}/upload`, {
+      method: "POST",
+      body: formData
+    });
+    const data = await res.json();
+    document.getElementById("uploadMsg").textContent = data.message || JSON.stringify(data);
+  } catch (err) {
+    document.getElementById("uploadMsg").textContent = "Error: " + err.message;
+  }
+});
+
+document.getElementById("askBtn").addEventListener("click", async () => {
+  const question = document.getElementById("question").value.trim();
+  if (!question) {
+    alert("Please enter a question.");
+    return;
+  }
+  document.getElementById("error").textContent = "";
+  document.getElementById("sqlOutput").textContent = "(running...)";
+  document.getElementById("resultsArea").innerHTML = "Loading...";
+  document.getElementById("answerArea").textContent = "Loading...";
+
+  try {
+    // Step 1: Send question to /query
+    const queryRes = await fetch(`${BASE_URL}/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question })
+    });
+    const queryData = await queryRes.json();
+
+    if (!queryRes.ok) {
+      document.getElementById("error").textContent = queryData.error || "Query failed";
+      return;
+    }
+
+    document.getElementById("sqlOutput").textContent = queryData.sql || "(no SQL)";
+    renderTable(queryData.result || []);
+
+    // Step 2: Send result to /summarize
+    const sumRes = await fetch(`${BASE_URL}/summarize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, result: queryData.result })
+    });
+    const sumData = await sumRes.json();
+    if (!sumRes.ok) {
+      document.getElementById("answerArea").textContent = "Summarization failed: " + (sumData.error || "");
+    } else {
+      document.getElementById("answerArea").textContent = sumData.answer || "(no answer)";
+    }
+
+  } catch (err) {
+    document.getElementById("error").textContent = "Error: " + err.message;
+  }
+});
+
+function renderTable(rows) {
+  if (!rows.length) {
+    document.getElementById("resultsArea").innerHTML = "<em>No data</em>";
+    return;
+  }
+  let html = "<table><thead><tr><th>#</th>";
+  Object.keys(rows[0]).forEach(key => { html += `<th>${key}</th>`; });
+  html += "</tr></thead><tbody>";
+  rows.forEach((row, i) => {
+    html += `<tr><td>${i+1}</td>`;
+    Object.values(row).forEach(val => { html += `<td>${val}</td>`; });
+    html += "</tr>";
+  });
+  html += "</tbody></table>";
+  document.getElementById("resultsArea").innerHTML = html;
+}
+</script>
+</body>
+</html>
